@@ -1,6 +1,7 @@
 #include "narvi/rebuilders.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -330,16 +331,110 @@ public:
     }
 };
 
+// cpio (newc "070701" / crc "070702") -- initramfs/initrd archives. moria writes
+// each member to <subdir>/<name>. Rebuild by walking the original archive and
+// re-emitting every member in order, swapping in the on-disk bytes only for
+// members whose content changed (and recomputing the 070702 data checksum).
+// Headers, names, member order, the TRAILER!!! entry and any trailing padding
+// are preserved from the original, so a no-edit repack is byte-identical and
+// cpio needs no offset fixups -- the format stores no absolute offsets.
+class CpioRebuilder : public Rebuilder {
+    static uint64_t align4(uint64_t x) { return (x + 3) & ~uint64_t(3); }
+    static uint64_t hex8(const std::string& s, size_t off) {
+        uint64_t v = 0;
+        for (size_t i = 0; i < 8; ++i) {
+            char ch = s[off + i]; uint64_t d;
+            if (ch >= '0' && ch <= '9') d = ch - '0';
+            else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+            else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+            else return UINT64_MAX;
+            v = v * 16 + d;
+        }
+        return v;
+    }
+    static void put_hex8(std::string& h, size_t off, uint32_t val) {
+        char b[9]; std::snprintf(b, sizeof(b), "%08x", val);
+        for (int i = 0; i < 8; ++i) h[off + i] = b[i];
+    }
+public:
+    std::string encode(const Segment& s, const Working& w, const RebuildContext& c,
+                       const std::string& orig) const override {
+        const std::string sub = c.subdir_path(s);
+        std::string out;
+        size_t pos = 0, n = orig.size();
+        while (pos + 110 <= n) {
+            std::string magic = orig.substr(pos, 6);
+            bool crc = (magic == "070702");
+            if (magic != "070701" && !crc) break;                 // not a header -> tail follows
+            uint64_t mode = hex8(orig, pos + 14);
+            uint64_t filesize = hex8(orig, pos + 54);
+            uint64_t namesize = hex8(orig, pos + 94);
+            if (mode == UINT64_MAX || filesize == UINT64_MAX || namesize == UINT64_MAX || namesize == 0)
+                break;
+            size_t name_off = pos + 110;
+            if (name_off + namesize > n) break;
+            std::string name = orig.substr(name_off, namesize);
+            if (auto z = name.find('\0'); z != std::string::npos) name.resize(z);
+            size_t data_off = pos + (size_t)align4(110 + namesize);
+            if (data_off > n || filesize > n - data_off) break;
+            size_t next = data_off + (size_t)align4(filesize);
+
+            if (name == "TRAILER!!!") break;                      // trailer + padding copied below
+
+            std::string head = orig.substr(pos, data_off - pos);  // header + name + name padding
+            std::string orig_data = orig.substr(data_off, (size_t)filesize);
+            uint32_t type = (uint32_t)mode & 0170000;
+
+            // The member's current bytes: a rebuilt nested child wins, else read
+            // from disk by type, else fall back to the original bytes.
+            std::string data;
+            bool have_new = false;
+            if (auto it = w.find(name); it != w.end()) { data = it->second; have_new = true; }
+            else {
+                std::string p = path_join(sub, name);
+                if (type == 0120000) {                            // symlink: data is the target
+                    std::error_code ec;
+                    auto tgt = std::filesystem::read_symlink(p, ec);
+                    if (!ec) { data = tgt.string(); have_new = true; }
+                } else if (type == 0100000) {                     // regular file
+                    if (file_exists(p)) { data = read_file(p); have_new = true; }
+                }
+                // directories and other types carry no data
+            }
+            if (!have_new) data = orig_data;
+
+            if (data == orig_data) {
+                out += head; out += orig_data;                    // unchanged: verbatim
+                out.append((size_t)align4(filesize) - (size_t)filesize, '\0');
+            } else {
+                put_hex8(head, 54, (uint32_t)data.size());        // c_filesize
+                if (crc) {                                        // c_check (offset 102) = sum of data bytes
+                    uint32_t sum = 0; for (unsigned char ch : data) sum += ch;
+                    put_hex8(head, 102, sum);
+                }
+                out += head; out += data;
+                out.append((size_t)align4(data.size()) - data.size(), '\0');
+            }
+            if (next <= pos) break;
+            pos = next;
+        }
+        out += orig.substr(pos);     // TRAILER!!! entry + any trailing block padding, verbatim
+        return out;
+    }
+};
+
 const Rebuilder& rebuilder_for(const std::string& type) {
     static const CompressedRebuilder compressed;
     static const UImageRebuilder uimage;
     static const SquashfsRebuilder squashfs;
     static const FitRebuilder fit;
+    static const CpioRebuilder cpio;
     static const PassthroughRebuilder passthrough;
     if (type == "gzip" || type == "lzma" || type == "xz" || type == "zstd" || type == "lz4") return compressed;
     if (type == "uimage") return uimage;
     if (type == "squashfs") return squashfs;
     if (type == "fit") return fit;
+    if (type == "cpio") return cpio;
     return passthrough;
 }
 

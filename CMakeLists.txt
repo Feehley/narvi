@@ -62,3 +62,7 @@ add_test(NAME fdt COMMAND narvi_fdt_tests)
 add_executable(narvi_fitrebuild_tests tests/fitrebuild.cpp)
 target_link_libraries(narvi_fitrebuild_tests PRIVATE narvi_core ZLIB::ZLIB)
 add_test(NAME fitrebuild COMMAND narvi_fitrebuild_tests)
+
+add_executable(narvi_cpio_tests tests/cpio.cpp)
+target_link_libraries(narvi_cpio_tests PRIVATE narvi_core ZLIB::ZLIB)
+add_test(NAME cpio COMMAND narvi_cpio_tests)

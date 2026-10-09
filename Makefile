@@ -29,7 +29,7 @@ LIB_OBJS := $(patsubst narvi/%.cpp,$(OBJDIR)/%.o,$(LIB_SRCS))
 CLI_OBJ  := $(OBJDIR)/cli.o
 BIN      := $(BUILD)/narvi
 
-TESTS    := roundtrip nested verify fixups fdt fitrebuild
+TESTS    := roundtrip nested verify fixups fdt fitrebuild cpio
 TESTBINS := $(addprefix $(BUILD)/,$(TESTS))
 
 .DEFAULT_GOAL := all

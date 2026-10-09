@@ -1,136 +1,250 @@
-# narvi
+# narvi (C++)
 
-**IoT firmware repacking**
+Repack firmware that [moria](https://github.com/nmatt0/moria) extracted — the
+C++ sibling of moria and mithril, built against the same toolchain (C++20 +
+zlib/lzma/zstd/lz4).
 
-narvi puts firmware back together after you've taken it apart. Point it at an image that [moria](https://github.com/nmatt0/moria) extracted, edit a file in the tree, and narvi re-encodes only what you touched and splices the rest back byte-for-byte. Named for the Dwarf who forged the Doors of Durin, the West-gate of Moria — moria opens the mountain and takes things out, narvi seals it back up.
+> Narvi was the Dwarf-smith who forged the Doors of Durin, the West-gate of
+> Moria. moria opens the mountain and takes things out; narvi seals it back up.
 
-## Why narvi
+## Why C++ fits
 
-- **Only re-encodes what changed.** Unchanged regions and gaps are copied verbatim, so a no-edit repack is byte-identical to the original. Edit one file and that region is the only thing rebuilt.
-- **Rebuilds the common formats in-process.** gzip / lzma / xz / zstd / lz4 streams, U-Boot uImage (CRCs fixed), SquashFS (via `mksquashfs`), and U-Boot FIT images (device-tree reserialized, hashes recomputed).
-- **Recursive, the same way moria is.** A gzip-wrapped FIT with a nested kernel rebuilds from the inside out — innermost payload first, then every container that wraps it.
-- **Fixes the checksums vendors hide in headers.** TRX CRC32, Seama MD5, U-Boot environment CRC, and FIT hash nodes are recomputed after splicing, under a validate-on-original rule so a correct checksum is never clobbered.
-- **Won't ship a silent mistake.** A region it can't rebuild fails loudly instead of writing stale bytes, and a signed FIT whose data changed is flagged, not quietly invalidated.
-- **No runtime dependencies beyond the codecs.** JSON parser, SHA-256/1, and MD5 are vendored; narvi links the same zlib / lzma / zstd / lz4 that moria already needs.
+narvi needs exactly the libraries moria already links, so the port adds no new
+runtime dependencies. The only things moria doesn't already have — a JSON
+*parser* (moria only emits JSON) and SHA-256 — are vendored header-only
+(`narvi/json.hpp`, `narvi/sha256.hpp`), keeping the zero-dependency stance.
 
-## Build & Install
+## Build
 
-```
-[~]> make
-[~]> make test
-[~]> sudo make install          # PREFIX=/usr/local; or make install PREFIX=~/.local
-```
+```bash
+make            # build the narvi binary + all test programs
+make test       # build and run every suite
+make install    # install the binary (PREFIX=/usr/local; use sudo, or DESTDIR=)
+make clean      # reset the directory to its downloaded state
 
-Build needs a C++20 compiler and the zlib, liblzma, lz4, and zstd development libraries. On Debian/Ubuntu: `sudo apt install g++ zlib1g-dev liblzma-dev liblz4-dev libzstd-dev`. CMake works too (`cmake -S . -B build && cmake --build build -j`). `make clean` resets the tree to its downloaded state. SquashFS repacking shells out to `mksquashfs` (`squashfs-tools`) — everything else is in-process.
+# or with CMake:
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+ctest --test-dir build            # roundtrip + nested + verify + fixups
 
-## Releases
-
-Don't want to build it? Grab a prebuilt binary from the [latest release](https://github.com/Feehley/narvi/releases/latest) — Linux x86_64 is fully static (no shared libraries to install), macOS x86_64 and arm64 bundle the codecs:
-
-```
-[~]> curl -LO https://github.com/Feehley/narvi/releases/latest/download/narvi-linux-x86_64
-[~]> chmod +x narvi-linux-x86_64
-[~]> ./narvi-linux-x86_64 --help
-```
-
-Each release ships a `SHA256SUMS` next to the binaries if you want to check the download. Building from source (above) is only needed to hack on narvi.
-
-## Usage
-
-```
-narvi init   FIRMWARE [-o recipe.json] [--moria PATH] [--force] [--no-verify]
-narvi plan   IMAGE [--extracted DIR] [--identify JSON] [-o recipe.json] [--deep]
-narvi status RECIPE
-narvi repack RECIPE [-o out.bin] [--policy fixed|reflow] [--pad 0xNN] [--no-fixups]
-narvi verify ORIG REPACKED [--recipe recipe.json]
-narvi check  RECIPE [--deep]
-narvi fdt    FILE [--offset 0xN]
+# or straight g++ (note: output into build/, since ./narvi would collide
+# with the narvi/ source directory):
+mkdir -p build
+g++ -std=c++20 -O2 -I. narvi/*.cpp -o build/narvi -lz -llzma -lzstd -llz4
+# tests (link the library sources except cli.cpp, which owns main):
+LIBS="narvi/codecs.cpp narvi/rebuilders.cpp narvi/recipe.cpp narvi/repacker.cpp narvi/verify.cpp narvi/fixups.cpp narvi/fdt.cpp"
+g++ -std=c++20 -O2 -I. tests/roundtrip.cpp $LIBS -o build/roundtrip -lz -llzma -lzstd -llz4 && ./build/roundtrip
+g++ -std=c++20 -O2 -I. tests/nested.cpp    $LIBS -o build/nested    -lz -llzma -lzstd -llz4 && ./build/nested
+g++ -std=c++20 -O2 -I. tests/verify.cpp    $LIBS -o build/verify    -lz -llzma -lzstd -llz4 && ./build/verify
+g++ -std=c++20 -O2 -I. tests/fixups.cpp    $LIBS -o build/fixups    -lz -llzma -lzstd -llz4 && ./build/fixups
+g++ -std=c++20 -O2 -I. tests/fdt.cpp       $LIBS -o build/fdt       -lz -llzma -lzstd -llz4 && ./build/fdt
+g++ -std=c++20 -O2 -I. tests/fitrebuild.cpp $LIBS -o build/fitrebuild -lz -llzma -lzstd -llz4 && ./build/fitrebuild
 ```
 
-`init` is the one you want. It runs moria's extract and identify and then plans, all in one step:
+`make clean` removes `build/` and resets the directory to its downloaded
+state.
 
-```
-[~]> narvi init firmware.bin -o rec.json
-[1/3] extracting   moria -e firmware.bin
-[2/3] identifying  moria -j firmware.bin > firmware.bin.identify.json
-[3/3] planning
-
-planned 2 region(s), 1 gap(s) over 4456452 bytes
-recipe: rec.json
-round-trip OK: no-edit repack is byte-identical (4456452 bytes)
-
-Next: edit files under firmware.bin.extracted/, then
-  narvi repack rec.json -o <output.bin> --policy reflow
-```
-
-Edit a file under `firmware.bin.extracted/`, check what moved, and write the new image:
-
-```
-[~]> narvi status rec.json
-  0x00000000  fit          unchanged
-  0x000401c0  squashfs     CHANGED
-
-[~]> narvi repack rec.json -o patched.bin --policy reflow
-output: 4458456 bytes
-  0x00000000  fit          unchanged  verbatim         262144 -> 262144
-  0x000401c0  squashfs     changed    rebuilt+reflow   4194308 -> 4196312
-  checksum fixups:
-    0x00000000  trx        fixed  (crc32 recomputed)
-wrote patched.bin
-```
+Needs `zlib1g-dev liblzma-dev libzstd-dev liblz4-dev`. `mksquashfs`
+(squashfs-tools) is only invoked if you edit a squashfs rootfs.
 
 ## Order of operations
 
-**Plan before you edit.** This is the one rule that will bite you if you skip it.
+**One command — `narvi init`** runs moria's extract + identify and plans in a
+single step, so the baseline is captured the moment the firmware is unpacked:
 
-narvi decides changed-versus-unchanged by diffing your files against a baseline it captures at plan time. So the baseline has to be taken while the tree is still pristine:
-
-1. `narvi init firmware.bin -o rec.json`  — extract + identify + plan (baseline captured here)
-2. edit files under `firmware.bin.extracted/`
-3. `narvi status rec.json`  — confirm the regions you touched say `CHANGED`
-4. `narvi repack rec.json -o patched.bin --policy reflow`
-
-If you edit *before* planning, the edited files become the baseline. narvi has nothing to compare against, so `status` says `unchanged`, `repack` splices the original bytes back, and the round-trip guard still reports "byte-identical" because it faithfully reproduced the untouched original. If that happens, restore the file, re-run `init`, then edit.
-
-## What narvi rebuilds
-
-`-e` left you a directory per region. Change a file in one and narvi re-encodes that region on repack:
-
-- **Compressed streams:** gzip, lzma (legacy standalone `.lzma`, alone format), xz, zstd, lz4 — re-compressed from the decoded payload moria wrote to disk.
-- **U-Boot uImage:** payload re-wrapped, `ih_size` and both header and data CRC32s fixed.
-- **SquashFS:** rebuilt with `mksquashfs`, reusing the original compressor and block size from the superblock.
-- **cpio (initramfs):** newc and crc archives rebuilt in-process — only the members you edited are re-emitted, the `070702` data checksum is recomputed, and every other member plus the `TRAILER!!!` is kept verbatim.
-- **U-Boot FIT (`.itb`):** the device-tree is reserialized so a subimage can grow or shrink, each subimage re-compressed per its `compression` property (none / gzip / lzma), every `crc32` / `sha1` / `sha256` / `md5` hash node recomputed over the new payload, and a signature over changed data flagged to re-sign.
-- **Anything else:** spliced verbatim when unchanged; a clear error if you edited it and no rebuilder exists yet.
-
-Growing a region past its original size shifts everything after it, so pass `--policy reflow`. The default `fixed` keeps the image length constant and pads a region that got smaller — or refuses one that got bigger.
-
-## Device trees
-
-narvi carries a small FDT tree model, so it doubles as a device-tree editor outside the repack flow. `narvi fdt FILE` prints a FIT/DTB summary and confirms the blob re-serializes byte-for-byte:
-
-```
-[~]> narvi fdt firmware.itb
-FDT @0x0  version=17  size=383  round-trip=identical
-images: 1
-  kernel           data=59 comp=gzip hash=sha256,crc32
+```bash
+narvi init firmware.bin -o fw.recipe.json        # extract + identify + plan
+# ...edit files under firmware.bin.extracted/ ...
+narvi status fw.recipe.json                       # confirm your edits show CHANGED
+narvi repack fw.recipe.json -o firmware.repacked.bin --policy reflow
 ```
 
-## Scope
+`init` needs `moria` on your PATH (or pass `--moria <path>`). It writes the
+extraction (`firmware.bin.extracted/`), the identify JSON (`firmware.bin.identify.json`),
+and the recipe.
 
-narvi repacks what moria identifies and extracts. It does not identify or carve on its own — that's moria's job — and it does not scan for secrets, CVEs, or licenses (see [mithril](https://github.com/nmatt0/mithril)).
+Why one command matters: narvi decides "changed vs unchanged" by diffing your
+files against a **baseline it captures at plan time**, so that baseline has to be
+taken *before* you edit anything. `init` does extract and plan together, closing
+the window where that can go wrong. The explicit form is the same three steps by
+hand (`narvi plan` on the freshly-extracted tree):
 
-## Shoutouts!
+```bash
+moria -e   firmware.bin
+moria -j   firmware.bin > firmware.identify.json
+narvi plan firmware.bin --identify firmware.identify.json -o fw.recipe.json
+# ...then edit, status, repack as above
+```
 
-- [moria](https://github.com/nmatt0/moria) — the extractor narvi is built to pair with; narvi reads its identify JSON and extraction layout directly.
-- The zlib, liblzma, zstd, and lz4 projects — the codecs that do the real compression work.
+> **Edit *after* planning, never before.** If you edit before `narvi plan` (or
+> re-extract over your edits), the edited files *become* the baseline: narvi has
+> nothing to compare against, so `status` reports `unchanged` and `repack` splices
+> the original bytes back — silently dropping your edit (and the round-trip guard
+> still says "byte-identical", because it reproduced the untouched original). If
+> that happens, restore the file, re-plan (or re-`init`), then re-apply your edit.
 
-## Follow on steps
+Use `--policy reflow` whenever an edit changes a region's size (a rebuilt
+squashfs or a grown FIT subimage never matches the vendor's exact byte size);
+`fixed` keeps the image length constant and refuses an edit that would overflow
+its slot.
 
-- Rebuilders for more filesystems (JFFS2, UBIFS, ext4) so you can edit inside them, not just splice them verbatim.
-- lz4 / zstd FIT subimages (the codecs are linked; the FIT path just doesn't wire them yet).
-- External-data FITs (`mkimage -E`), where payloads sit after the device-tree — currently reported and left alone.
+## Use
 
-## License
+```bash
+narvi init   firmware.bin -o fw.recipe.json    # extract + identify + plan (needs moria on PATH)
 
-MIT, see `LICENSE`.
+# ...or the explicit steps:
+moria -e firmware.bin
+moria -j firmware.bin > firmware.identify.json
+
+narvi plan   firmware.bin --identify firmware.identify.json -o fw.recipe.json
+# plan runs a round-trip guard by default: a no-edit repack must reproduce the
+# original byte-for-byte, else it prints ROUND-TRIP FAILED and exits non-zero.
+# --deep additionally prints per-region re-encode fidelity; --no-verify skips it.
+
+# ...edit files under firmware.bin.extracted/ ...
+narvi status fw.recipe.json
+narvi repack fw.recipe.json -o firmware.repacked.bin
+# repack recomputes outer container checksums after splicing (see below);
+# --no-fixups disables that pass.
+
+# provenance:
+narvi check  fw.recipe.json --deep                 # re-run guard + fidelity later
+narvi verify firmware.bin firmware.repacked.bin --recipe fw.recipe.json
+#   -> lists exactly which byte ranges moved, named by region
+
+# inspect a FIT/DTB and confirm it re-serializes byte-for-byte:
+narvi fdt firmware.itb
+#   -> FDT @0x0 version=17 size=... round-trip=identical
+```
+
+Fidelity states: `exact` (editing rewrites only your change), `lossy` (the
+encoder doesn't reproduce the vendor's stream, so an edit re-encodes the whole
+region), `no-encoder` (edits fail loudly). Unchanged regions are always spliced
+verbatim, so fidelity only matters for regions you actually edit.
+
+### Container checksum fixups
+
+Many images wrap their payload in a header carrying a checksum over the rest of
+the file (a TRX CRC, a U-Boot env CRC, a Seama MD5, ...). moria usually descends
+past these to the squashfs/kernel inside, so the wrapper header lands in a narvi
+gap and is spliced back verbatim -- and an edit to something the checksum covers
+would leave the image internally inconsistent. After assembling the image,
+`repack` runs a fixup pass that repairs them, under one safety rule:
+
+> **validate-on-original, recompute-on-output** -- a fixup fires only for a
+> wrapper whose stored checksum was *correct in the source*, and only rewrites
+> the field when the covered bytes actually changed.
+
+So it never corrupts a false positive and a no-edit repack stays byte-identical.
+Nested wrappers are patched inner-first. Recomputed today: **TRX** (CRC32),
+**U-Boot env** (CRC32, anchored on moria's `uboot_env` finding), **Seama** (MD5),
+and **FIT** (`.itb`) per-subimage **hash** nodes -- a small FDT walker
+(`fdt.hpp`/`fdt.cpp`) finds each `/images/*/hash*` node and recomputes its
+`crc32`/`sha1`/`sha256`/`md5` value in place over the subimage payload. A FIT
+*signature* needs a private key, so a changed signed image is *flagged*
+`signature-invalidated` (re-sign with `mkimage -F -k`) rather than shipped stale.
+A length-changing subimage edit needs the FDT rebuilt rather than patched in
+place -- see the reserializer below. `--no-fixups` disables the pass.
+
+### FDT reserializer & general DTB editing
+
+The in-place fixup handles size-neutral edits. When a subimage payload changes
+*length*, the device-tree must be rebuilt -- property lengths, the struct and
+strings blocks, header offsets and `totalsize` all move. `fdt.hpp`/`fdt.cpp`
+carry a small tree model that does this and doubles as a general DTB editor:
+
+```cpp
+#include "narvi/fdt.hpp"
+using namespace narvi;
+
+// General DTB editing: parse -> edit -> serialize (byte-identical if unmodified).
+Fdt fdt = parse_dtb(blob);                       // throws if not an FDT
+fdt.path("/images/kernel")->set("compression", std::string("lzma\0", 5));
+std::string out = fdt.to_bytes();
+
+// FIT rebuild: replace a subimage payload of ANY length; hashes recomputed,
+// signatures flagged. edits maps subimage name -> new *stored* bytes.
+auto [new_fit, report] = rebuild_fit(blob, {{"kernel", new_kernel_bytes}});
+// report.resized / report.hashes / report.invalidated_sigs / report.external_skipped
+```
+
+Fidelity rule: every existing property keeps its original name offset and the
+memory-reservation block is preserved verbatim, so `parse_dtb(b).to_bytes() == b`
+for a canonically-laid-out FDT. `rebuild_fit` updates `data-size`, recomputes each
+`crc32`/`sha1`/`sha256`/`md5` hash node over the subimage's stored payload, and
+flags signatures over changed data; external-data subimages are reported and left
+untouched. `narvi fdt FILE` prints the tree summary and confirms the round-trip.
+
+`repack` wires this in: a `fit` region whose subimage you edited is rebuilt
+automatically -- re-compressing only the changed subimages (per the FDT's
+`compression` property), reusing original stored bytes for the rest, then
+reserializing. Grow past the slot with `--policy reflow`; otherwise the rebuilt
+FIT is padded. A container nested in a subimage rebuilds inner-first. Automatic
+re-compression covers `none`/`gzip`/`lzma` (deterministic, so a given edit
+rebuilds identically every run); lz4/zstd are refused with a pointer to
+`rebuild_fit` (future work).
+
+Library API:
+
+```cpp
+#include "narvi/recipe.hpp"
+#include "narvi/repacker.hpp"
+using namespace narvi;
+
+Recipe r = Recipe::from_extraction("firmware.bin", "firmware.bin.extracted",
+                                   "firmware.identify.json");   // identify optional
+r.save("fw.recipe.json");
+// ...edit extracted files...
+RepackReport rep = Repacker(r).repack("firmware.repacked.bin");   // policy "fixed" | "reflow"
+std::printf("%s", rep.summary().c_str());
+```
+
+## Design
+
+The original image is the source of truth. narvi tiles it into an ordered,
+gap-free layout of **regions** (moria findings) and **gaps** (padding, vendor
+headers, unidentified/encrypted bytes). On repack, unchanged regions and all
+gaps are copied **byte for byte**; only edited regions are re-encoded, and their
+parent headers/CRCs fixed up.
+
+narvi reads only `offset`/`size`/`type`/`compression`/`endian`/`version`/`arch`/
+`label` from moria's identify JSON and ignores every other field, so it tracks
+moria's schema as it grows (newer additions like `category`, `mime`, `confidence`,
+`entropy`, `references` are ignored). A moria finding type with no rebuilder
+(e.g. a new filesystem) is spliced verbatim when unchanged and refuses a
+size-changing edit rather than corrupting it.
+
+| Region type | Behaviour |
+|---|---|
+| any type, unchanged | verbatim (byte-identical) |
+| `gzip` `lzma` `xz` `zstd` `lz4` | re-compressed when edited (standalone `.lzma` re-encodes to alone format) |
+| `uimage` (U-Boot legacy) | payload re-wrapped, `ih_size` + header/data CRC32 fixed |
+| `squashfs` | rebuilt via external `mksquashfs`, reusing original compressor + block size |
+| `cpio` (newc / crc initramfs) | rebuilt in-process: changed members re-emitted, `070702` data checksum recomputed, other members + trailer kept verbatim |
+| other filesystems | verbatim if unchanged; clear error if edited (no rebuilder yet) |
+
+Add a rebuilder by subclassing `Rebuilder` (`content_hash` + `rebuild`) and
+extending `rebuilder_for()` in `narvi/rebuilders.cpp`.
+
+**Layout policy** — `fixed` (default) pads a shortened region back to its slot
+(`--pad 0xff` for NOR flash) and errors if a region overflows its partition;
+`reflow` concatenates at natural sizes (only for images without fixed offsets).
+
+## Limitations
+
+Cryptographically sealed regions (vbmeta, FIT signatures, D-Link SHRS/DLK,
+dm-verity) can't be resealed without vendor keys — narvi fixes plain CRCs, not
+signatures. uImage payloads are handled in final on-image form (supply a
+compressed payload already compressed, or model the inner region).
+
+## Files
+
+```
+narvi/json.hpp        vendored JSON parser        narvi/recipe.{hpp,cpp}   ingest moria output
+narvi/sha256.hpp      vendored SHA-256            narvi/repacker.{hpp,cpp} splice engine
+narvi/model.hpp       layout model               narvi/cli.cpp            command line
+narvi/codecs.{hpp,cpp}    compression + CRC      tests/roundtrip.cpp      end-to-end tests
+narvi/rebuilders.{hpp,cpp} per-type re-encoding   tests/fitbuild.hpp       FIT builder (tests)
+narvi/fdt.{hpp,cpp}   FDT walker + reserializer   narvi/sha1.hpp           vendored SHA-1
+tests/fitrebuild.cpp  FIT rebuild-in-repack tests
+```
