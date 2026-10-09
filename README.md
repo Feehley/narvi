@@ -109,8 +109,9 @@ narvi repacks what moria identifies and extracts. It does not identify or carve 
 
 ## Shoutouts!
 
-- [moria](https://github.com/nmatt0/moria) — the extractor narvi is built to pair with; narvi reads its identify JSON and extraction layout directly.
+- [nmatt0/moria](https://github.com/nmatt0/moria) — the extractor narvi is built to pair with; narvi reads its identify JSON and extraction layout directly.
 - The zlib, liblzma, zstd, and lz4 projects — the codecs that do the real compression work.
+- Built with Claude Code — the C++ port, FIT reserializer, and rebuilders were written in collaboration with Claude.
 
 ## Follow on steps
 
