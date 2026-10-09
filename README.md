@@ -99,6 +99,7 @@ If you edit *before* planning, the edited files become the baseline. narvi has n
 - **Compressed streams:** gzip, lzma (legacy standalone `.lzma`, alone format), xz, zstd, lz4 — re-compressed from the decoded payload moria wrote to disk.
 - **U-Boot uImage:** payload re-wrapped, `ih_size` and both header and data CRC32s fixed.
 - **SquashFS:** rebuilt with `mksquashfs`, reusing the original compressor and block size from the superblock.
+- **cpio (initramfs):** newc and crc archives rebuilt in-process — only the members you edited are re-emitted, the `070702` data checksum is recomputed, and every other member plus the `TRAILER!!!` is kept verbatim.
 - **U-Boot FIT (`.itb`):** the device-tree is reserialized so a subimage can grow or shrink, each subimage re-compressed per its `compression` property (none / gzip / lzma), every `crc32` / `sha1` / `sha256` / `md5` hash node recomputed over the new payload, and a signature over changed data flagged to re-sign.
 - **Anything else:** spliced verbatim when unchanged; a clear error if you edited it and no rebuilder exists yet.
 
