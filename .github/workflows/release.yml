@@ -20,10 +20,6 @@ jobs:
         include:
           - os: ubuntu-latest   # Linux x86_64 — fully static, runs anywhere
             asset: narvi-linux-x86_64
-          - os: macos-13        # Intel mac
-            asset: narvi-macos-x86_64
-          - os: macos-14        # Apple Silicon
-            asset: narvi-macos-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,26 +29,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y g++ zlib1g-dev liblzma-dev liblz4-dev libzstd-dev
-
-      - name: Install build deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install xz zstd lz4      # zlib ships with the macOS SDK
-
+          
       - name: Build (Linux — fully static)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
           g++ -std=c++20 -O2 -I. narvi/*.cpp -o dist/${{ matrix.asset }} \
             -static -lz -llzma -lzstd -llz4
-          strip dist/${{ matrix.asset }}
-
-      - name: Build (macOS — static codecs, system libs dynamic)
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p dist
-          XZ="$(brew --prefix xz)"; ZSTD="$(brew --prefix zstd)"; LZ4="$(brew --prefix lz4)"
-          g++ -std=c++20 -O2 -I. narvi/*.cpp -o dist/${{ matrix.asset }} \
-            "$XZ/lib/liblzma.a" "$ZSTD/lib/libzstd.a" "$LZ4/lib/liblz4.a" -lz
           strip dist/${{ matrix.asset }}
 
       - name: Smoke-test the binary
