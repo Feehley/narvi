@@ -1,0 +1,92 @@
+# Build narvi binaries for Linux and macOS and publish them on every version tag.
+# Push a tag like v0.1.0 and this builds one binary per platform, then creates
+# the GitHub Release with all of them (plus SHA256SUMS) attached — the way moria
+# ships prebuilt binaries.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}      # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write            # needed to create the Release and upload assets
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest   # Linux x86_64 — fully static, runs anywhere
+            asset: narvi-linux-x86_64
+          - os: macos-13        # Intel mac
+            asset: narvi-macos-x86_64
+          - os: macos-14        # Apple Silicon
+            asset: narvi-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ zlib1g-dev liblzma-dev liblz4-dev libzstd-dev
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install xz zstd lz4      # zlib ships with the macOS SDK
+
+      - name: Build (Linux — fully static)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          g++ -std=c++20 -O2 -I. narvi/*.cpp -o dist/${{ matrix.asset }} \
+            -static -lz -llzma -lzstd -llz4
+          strip dist/${{ matrix.asset }}
+
+      - name: Build (macOS — static codecs, system libs dynamic)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          XZ="$(brew --prefix xz)"; ZSTD="$(brew --prefix zstd)"; LZ4="$(brew --prefix lz4)"
+          g++ -std=c++20 -O2 -I. narvi/*.cpp -o dist/${{ matrix.asset }} \
+            "$XZ/lib/liblzma.a" "$ZSTD/lib/libzstd.a" "$LZ4/lib/liblz4.a" -lz
+          strip dist/${{ matrix.asset }}
+
+      - name: Smoke-test the binary
+        run: ./dist/${{ matrix.asset }} 2>&1 | head -1
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Collect binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true      # flatten all platform artifacts into dist/
+
+      - name: Checksums
+        run: |
+          cd dist
+          chmod +x narvi-* || true
+          sha256sum narvi-* > SHA256SUMS
+          ls -l
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/narvi-*
+            dist/SHA256SUMS
+          generate_release_notes: true
