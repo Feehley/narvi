@@ -47,8 +47,8 @@ static std::string positional(const std::vector<std::string>& a, size_t from) {
     return "";
 }
 
-static int usage() {
-    std::cerr <<
+static int usage(bool to_stdout = false) {
+    (to_stdout ? std::cout : std::cerr) <<
         "narvi -- repack firmware that moria extracted\n"
         "  narvi init FIRMWARE [-o recipe.json] [--moria PATH] [--force] [--no-verify]\n"
         "                                      extract + identify + plan in one step\n"
@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> a(argv + 1, argv + argc);
     if (a.empty()) return usage();
     std::string cmd = a[0];
+    if (cmd == "--help" || cmd == "-h" || cmd == "help") { usage(/*to_stdout=*/true); return 0; }
 
     try {
         if (cmd == "init") {

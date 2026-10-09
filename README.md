@@ -23,6 +23,18 @@ narvi puts firmware back together after you've taken it apart. Point it at an im
 
 Build needs a C++20 compiler and the zlib, liblzma, lz4, and zstd development libraries. On Debian/Ubuntu: `sudo apt install g++ zlib1g-dev liblzma-dev liblz4-dev libzstd-dev`. CMake works too (`cmake -S . -B build && cmake --build build -j`). `make clean` resets the tree to its downloaded state. SquashFS repacking shells out to `mksquashfs` (`squashfs-tools`) — everything else is in-process.
 
+## Releases
+
+Don't want to build it? Grab a prebuilt binary from the [latest release](https://github.com/Feehley/narvi/releases/latest) — Linux x86_64 is fully static (no shared libraries to install), macOS x86_64 and arm64 bundle the codecs:
+
+```
+[~]> curl -LO https://github.com/Feehley/narvi/releases/latest/download/narvi-linux-x86_64
+[~]> chmod +x narvi-linux-x86_64
+[~]> ./narvi-linux-x86_64 --help
+```
+
+Each release ships a `SHA256SUMS` next to the binaries if you want to check the download. Building from source (above) is only needed to hack on narvi.
+
 ## Usage
 
 ```
@@ -109,9 +121,8 @@ narvi repacks what moria identifies and extracts. It does not identify or carve 
 
 ## Shoutouts!
 
-- [nmatt0/moria](https://github.com/nmatt0/moria) — the extractor narvi is built to pair with; narvi reads its identify JSON and extraction layout directly.
+- [moria](https://github.com/nmatt0/moria) — the extractor narvi is built to pair with; narvi reads its identify JSON and extraction layout directly.
 - The zlib, liblzma, zstd, and lz4 projects — the codecs that do the real compression work.
-- Built with Claude Code — the C++ port, FIT reserializer, and rebuilders were written in collaboration with Claude.
 
 ## Follow on steps
 
